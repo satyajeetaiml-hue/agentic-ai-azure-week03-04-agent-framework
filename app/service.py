@@ -26,11 +26,17 @@ class Settings(BaseSettings):
     app_env: str = "local"
     foundry_project_endpoint: str = ""
     foundry_model_name: str = "gpt-4o"
-    cosmos_connection_string: str = ""  # durable memory in prod (unused in mock)
+    cosmos_connection_string: str = ""  # set to enable durable Cosmos DB memory
+    cosmos_database: str = "agentmemory"
+    cosmos_container: str = "sessions"
 
     @property
     def use_foundry(self) -> bool:
         return bool(self.foundry_project_endpoint)
+
+    @property
+    def use_cosmos(self) -> bool:
+        return bool(self.cosmos_connection_string)
 
 
 @lru_cache
@@ -93,22 +99,85 @@ def redact_pii(text: str) -> tuple[str, bool]:
     return redacted, redacted != text
 
 
-# ── in-memory session memory (Cosmos DB in prod) ────────────────────────
-_MEMORY: dict[str, list[dict]] = {}
+# ── session memory: in-memory (mock) or durable Cosmos DB ───────────────
+class InMemoryStore:
+    """Process-local memory — fine for dev/tests, lost on restart."""
+
+    backend = "in-memory"
+
+    def __init__(self) -> None:
+        self._data: dict[str, list[dict]] = {}
+
+    def append(self, session_id: str, query: str, answer: str) -> int:
+        turns = self._data.setdefault(session_id, [])
+        turns.append({"query": query, "answer": answer})
+        return len(turns)
+
+    def recent(self, session_id: str, n: int = 2) -> list[dict]:
+        return self._data.get(session_id, [])[-n:]
 
 
-def _remember(session_id: str, query: str, answer: str) -> int:
-    turns = _MEMORY.setdefault(session_id, [])
-    turns.append({"query": query, "answer": answer})
-    return len(turns)
+class CosmosMemoryStore:
+    """Durable memory in Azure Cosmos DB, partitioned by ``sessionId``.
+
+    Lazy-imports the SDK and creates the database/container on first use.
+    """
+
+    backend = "cosmos"
+
+    def __init__(self) -> None:
+        from azure.cosmos import CosmosClient, PartitionKey
+
+        s = get_settings()
+        client = CosmosClient.from_connection_string(s.cosmos_connection_string)
+        db = client.create_database_if_not_exists(id=s.cosmos_database)
+        self._container = db.create_container_if_not_exists(
+            id=s.cosmos_container, partition_key=PartitionKey(path="/sessionId")
+        )
+
+    def append(self, session_id: str, query: str, answer: str) -> int:
+        import time
+        import uuid
+
+        self._container.upsert_item(
+            {
+                "id": uuid.uuid4().hex,
+                "sessionId": session_id,
+                "query": query,
+                "answer": answer,
+                "ts": time.time_ns(),  # high-resolution, strictly increasing per call
+            }
+        )
+        rows = list(
+            self._container.query_items(
+                query="SELECT VALUE COUNT(1) FROM c WHERE c.sessionId = @s",
+                parameters=[{"name": "@s", "value": session_id}],
+                partition_key=session_id,
+            )
+        )
+        return rows[0] if rows else 0
+
+    def recent(self, session_id: str, n: int = 2) -> list[dict]:
+        items = list(
+            self._container.query_items(
+                query="SELECT * FROM c WHERE c.sessionId = @s ORDER BY c.ts DESC",
+                parameters=[{"name": "@s", "value": session_id}],
+                partition_key=session_id,
+            )
+        )
+        return list(reversed(items[:n]))
+
+
+@lru_cache
+def get_memory_store():
+    return CosmosMemoryStore() if get_settings().use_cosmos else InMemoryStore()
 
 
 def _recent_context(session_id: str) -> str:
-    turns = _MEMORY.get(session_id, [])
+    turns = get_memory_store().recent(session_id, n=2)
     if not turns:
         return ""
-    last = turns[-2:]
-    return " | ".join(f"Q:{t['query']}" for t in last)
+    return " | ".join(f"Q:{t['query']}" for t in turns)
 
 
 SYSTEM_INSTRUCTIONS = (
@@ -137,7 +206,7 @@ class MockResearchBackend:
             body = f"No holdings found for client '{req.client_id}'."
 
         answer = f"{body}\n\n{DISCLAIMER}"
-        turns = _remember(req.session_id, clean_query, body)
+        turns = get_memory_store().append(req.session_id, clean_query, body)
         return ResearchResponse(
             answer=answer,
             sources=["tool:get_holdings", "tool:get_market_data"],
@@ -180,7 +249,7 @@ class FoundryResearchBackend:
             body = resp.output_text or "No response."
 
         answer = f"{body}\n\n{DISCLAIMER}"  # middleware: disclaimer injection
-        turns = _remember(req.session_id, clean_query, body)
+        turns = get_memory_store().append(req.session_id, clean_query, body)
         return ResearchResponse(
             answer=answer,
             sources=["tool:get_holdings", "tool:get_market_data", "foundry:responses"],

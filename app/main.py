@@ -14,7 +14,12 @@ app = FastAPI(title="Weeks 3-4 — Agent Framework (Wealth Research)", version="
 
 @app.get("/health", tags=["health"])
 def health() -> dict[str, str]:
-    return {"status": "ok", "week": "3-4", "backend": "foundry" if settings.use_foundry else "mock"}
+    return {
+        "status": "ok",
+        "week": "3-4",
+        "backend": "foundry" if settings.use_foundry else "mock",
+        "memory": "cosmos" if settings.use_cosmos else "in-memory",
+    }
 
 
 @app.get("/", tags=["root"])
