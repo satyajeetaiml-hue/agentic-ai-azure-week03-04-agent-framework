@@ -100,3 +100,10 @@ Next: [Week 5 — MCP & Tools](https://github.com/satyajeetaiml-hue/agentic-ai-a
 
 ## 📄 License
 MIT — see [`LICENSE`](LICENSE).
+
+## 📊 Teaching slides
+
+Download the **7-slide deck** for classroom use: [`agentic-ai-azure-week03-04-agent-framework.pptx`](slides/agentic-ai-azure-week03-04-agent-framework.pptx)
+
+> Slides: Title · Learning goal · Enterprise use case · Architecture/flow · Key concepts · Run it · Architect's takeaways.
+
