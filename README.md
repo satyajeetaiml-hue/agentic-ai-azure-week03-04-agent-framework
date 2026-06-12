@@ -105,5 +105,7 @@ MIT — see [`LICENSE`](LICENSE).
 
 Download the **7-slide deck** for classroom use: [`agentic-ai-azure-week03-04-agent-framework.pptx`](slides/agentic-ai-azure-week03-04-agent-framework.pptx)
 
+Prefer PDF? Download the **handout (slides + speaker notes)**: [`agentic-ai-azure-week03-04-agent-framework-handout.pdf`](slides/agentic-ai-azure-week03-04-agent-framework-handout.pdf)
+
 > Slides: Title · Learning goal · Enterprise use case · Architecture/flow · Key concepts · Run it · Architect's takeaways.
 
